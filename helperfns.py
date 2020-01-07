@@ -58,47 +58,47 @@ def choose_optimizer(params, regularized_loss, trainable_var):
         'proximalAdagrad', or 'RMS'
     """
     if params['opt_alg'] == 'adam':
-        optimizer = tf.train.AdamOptimizer(params['learning_rate']).minimize(regularized_loss, var_list=trainable_var)
+        optimizer = tf.compat.v1.train.AdamOptimizer(params['learning_rate']).minimize(regularized_loss, var_list=trainable_var)
     elif params['opt_alg'] == 'adadelta':
         if params['decay_rate'] > 0:
-            optimizer = tf.train.AdadeltaOptimizer(params['learning_rate'], params['decay_rate']).minimize(
+            optimizer = tf.compat.v1.train.AdadeltaOptimizer(params['learning_rate'], params['decay_rate']).minimize(
                 regularized_loss,
                 var_list=trainable_var)
         else:
             # defaults 0.001, 0.95
-            optimizer = tf.train.AdadeltaOptimizer(params['learning_rate']).minimize(regularized_loss,
+            optimizer = tf.compat.v1.train.AdadeltaOptimizer(params['learning_rate']).minimize(regularized_loss,
                                                                                      var_list=trainable_var)
     elif params['opt_alg'] == 'adagrad':
         # also has initial_accumulator_value parameter
-        optimizer = tf.train.AdagradOptimizer(params['learning_rate']).minimize(regularized_loss,
+        optimizer = tf.compat.v1.train.AdagradOptimizer(params['learning_rate']).minimize(regularized_loss,
                                                                                 var_list=trainable_var)
     elif params['opt_alg'] == 'adagradDA':
         # Be careful when using AdagradDA for deep networks as it will require careful initialization of the gradient
         # accumulators for it to train.
-        optimizer = tf.train.AdagradDAOptimizer(params['learning_rate'], tf.get_global_step()).minimize(
+        optimizer = tf.compat.v1.train.AdagradDAOptimizer(params['learning_rate'], tf.get_global_step()).minimize(
             regularized_loss,
             var_list=trainable_var)
     elif params['opt_alg'] == 'ftrl':
         # lots of hyperparameters: learning_rate_power, initial_accumulator_value,
         # l1_regularization_strength, l2_regularization_strength
-        optimizer = tf.train.FtrlOptimizer(params['learning_rate']).minimize(regularized_loss, var_list=trainable_var)
+        optimizer = tf.compat.v1.train.FtrlOptimizer(params['learning_rate']).minimize(regularized_loss, var_list=trainable_var)
     elif params['opt_alg'] == 'proximalGD':
         # can have built-in reg.
-        optimizer = tf.train.ProximalGradientDescentOptimizer(params['learning_rate']).minimize(regularized_loss,
+        optimizer = tf.compat.v1.train.ProximalGradientDescentOptimizer(params['learning_rate']).minimize(regularized_loss,
                                                                                                 var_list=trainable_var)
     elif params['opt_alg'] == 'proximalAdagrad':
         # initial_accumulator_value, reg.
-        optimizer = tf.train.ProximalAdagradOptimizer(params['learning_rate']).minimize(regularized_loss,
+        optimizer = tf.compat.v1.train.ProximalAdagradOptimizer(params['learning_rate']).minimize(regularized_loss,
                                                                                         var_list=trainable_var)
     elif params['opt_alg'] == 'RMS':
         # momentum, epsilon, centered (False/True)
         if params['decay_rate'] > 0:
-            optimizer = tf.train.RMSPropOptimizer(params['learning_rate'], params['decay_rate']).minimize(
+            optimizer = tf.compat.v1.train.RMSPropOptimizer(params['learning_rate'], params['decay_rate']).minimize(
                 regularized_loss,
                 var_list=trainable_var)
         else:
             # default decay_rate 0.9
-            optimizer = tf.train.RMSPropOptimizer(params['learning_rate']).minimize(regularized_loss,
+            optimizer = tf.compat.v1.train.RMSPropOptimizer(params['learning_rate']).minimize(regularized_loss,
                                                                                     var_list=trainable_var)
     else:
         raise ValueError("chose invalid opt_alg %s in params dict" % params['opt_alg'])

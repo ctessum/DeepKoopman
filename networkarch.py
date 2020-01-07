@@ -30,7 +30,7 @@ def weight_variable(shape, var_name, distribution='tn', scale=0.1):
         # see page 295 of Goodfellow et al's DL book
         # divide by sqrt of m, where m is number of inputs
         scale = 1.0 / np.sqrt(shape[0])
-        initial = tf.random_uniform(shape, minval=-scale, maxval=scale, dtype=tf.float64)
+        initial = tf.random.uniform(shape, minval=-scale, maxval=scale, dtype=tf.float64)
     elif distribution == 'he':
         # from He, et al. ICCV 2015 (referenced in Andrew Ng's class)
         # divide by m, where m is number of inputs
@@ -88,7 +88,7 @@ def encoder(widths, dist_weights, dist_biases, scale, num_shifts_max):
     Side effects:
         None
     """
-    x = tf.placeholder(tf.float64, [num_shifts_max + 1, None, widths[0]])
+    x = tf.compat.v1.placeholder(tf.float64, [num_shifts_max + 1, None, widths[0]])
 
     weights = dict()
     biases = dict()
@@ -374,7 +374,7 @@ def omega_net_apply(params, ycoords, weights, biases):
         temp_name = 'OC%d_' % (j + 1)
         ind = 2 * j
         pair_of_columns = ycoords[:, ind:ind + 2]
-        radius_of_pair = tf.reduce_sum(tf.square(pair_of_columns), axis=1, keep_dims=True)
+        radius_of_pair = tf.reduce_sum(tf.square(pair_of_columns), axis=1, keepdims=True)
         omegas.append(
             omega_net_apply_one(params, radius_of_pair, weights, biases, temp_name))
     for j in np.arange(params['num_real']):

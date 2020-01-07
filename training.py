@@ -39,7 +39,7 @@ def define_loss(x, y, g_list, weights, biases, params):
     if params['relative_loss']:
         loss1_denominator = tf.reduce_mean(tf.reduce_mean(tf.square(tf.squeeze(x[0, :, :])), 1)) + denominator_nonzero
     else:
-        loss1_denominator = tf.to_double(1.0)
+        loss1_denominator = tf.cast(1.0, tf.float64)
 
     mean_squared_error = tf.reduce_mean(tf.reduce_mean(tf.square(y[0] - tf.squeeze(x[0, :, :])), 1))
     loss1 = params['recon_lam'] * tf.truediv(mean_squared_error, loss1_denominator)
@@ -54,7 +54,7 @@ def define_loss(x, y, g_list, weights, biases, params):
                 loss2_denominator = tf.reduce_mean(
                     tf.reduce_mean(tf.square(tf.squeeze(x[shift, :, :])), 1)) + denominator_nonzero
             else:
-                loss2_denominator = tf.to_double(1.0)
+                loss2_denominator = tf.cast(1.0, tf.float64)
             loss2 = loss2 + params['recon_lam'] * tf.truediv(
                 tf.reduce_mean(tf.reduce_mean(tf.square(y[j + 1] - tf.squeeze(x[shift, :, :])), 1)), loss2_denominator)
         loss2 = loss2 / params['num_shifts']
@@ -74,7 +74,7 @@ def define_loss(x, y, g_list, weights, biases, params):
                     loss3_denominator = tf.reduce_mean(
                         tf.reduce_mean(tf.square(tf.squeeze(g_list[count_shifts_middle + 1])), 1)) + denominator_nonzero
                 else:
-                    loss3_denominator = tf.to_double(1.0)
+                    loss3_denominator = tf.cast(1.0, tf.float64)
                 loss3 = loss3 + params['mid_shift_lam'] * tf.truediv(
                     tf.reduce_mean(tf.reduce_mean(tf.square(next_step - g_list[count_shifts_middle + 1]), 1)),
                     loss3_denominator)
@@ -90,8 +90,8 @@ def define_loss(x, y, g_list, weights, biases, params):
         Linf1_den = tf.norm(tf.norm(tf.squeeze(x[0, :, :]), axis=1, ord=np.inf), ord=np.inf) + denominator_nonzero
         Linf2_den = tf.norm(tf.norm(tf.squeeze(x[1, :, :]), axis=1, ord=np.inf), ord=np.inf) + denominator_nonzero
     else:
-        Linf1_den = tf.to_double(1.0)
-        Linf2_den = tf.to_double(1.0)
+        Linf1_den = tf.cast(1.0, tf.float64)
+        Linf2_den = tf.cast(1.0, tf.float64)
 
     Linf1_penalty = tf.truediv(
         tf.norm(tf.norm(y[0] - tf.squeeze(x[0, :, :]), axis=1, ord=np.inf), ord=np.inf), Linf1_den)
@@ -160,7 +160,7 @@ def try_net(data_val, params):
     max_shifts_to_stack = helperfns.num_shifts_in_stack(params)
 
     # DEFINE LOSS FUNCTION
-    trainable_var = tf.trainable_variables()
+    trainable_var = tf.compat.v1.trainable_variables()
     loss1, loss2, loss3, loss_Linf, loss = define_loss(x, y, g_list, weights, biases, params)
     loss_L1, loss_L2, regularized_loss, regularized_loss1 = define_regularization(params, trainable_var, loss, loss1)
 
@@ -169,11 +169,11 @@ def try_net(data_val, params):
     optimizer_autoencoder = helperfns.choose_optimizer(params, regularized_loss1, trainable_var)
 
     # LAUNCH GRAPH AND INITIALIZE
-    sess = tf.Session()
-    saver = tf.train.Saver()
+    sess = tf.compat.v1.Session()
+    saver = tf.compat.v1.train.Saver()
 
     # Before starting, initialize the variables.  We will 'run' this first.
-    init = tf.global_variables_initializer()
+    init = tf.compat.v1.global_variables_initializer()
     sess.run(init)
 
     csv_path = params['model_path'].replace('model', 'error')
@@ -304,7 +304,7 @@ def main_exp(params):
     if not os.path.exists(params['folder_name']):
         os.makedirs(params['folder_name'])
 
-    tf.set_random_seed(params['seed'])
+    tf.compat.v1.set_random_seed(params['seed'])
     np.random.seed(params['seed'])
     # data is num_steps x num_examples x n but load flattened version (matrix instead of tensor)
     data_val = np.loadtxt(('./data/%s_val_x.csv' % (params['data_name'])), delimiter=',', dtype=np.float64)
