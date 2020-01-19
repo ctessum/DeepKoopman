@@ -1,5 +1,6 @@
 function X = PendulumFn(x1range, x2range, numICs, tSpan, seed, max_potential)
 
+pkg load odepkg
 
 % try some initial conditions for x1, x2
 rng(seed)
@@ -37,5 +38,3 @@ end
 if count < numICs
     sprintf('oops, potential energy too small for IC box')
 end
-
-
