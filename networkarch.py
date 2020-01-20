@@ -3,6 +3,37 @@ import tensorflow as tf
 
 import helperfns
 
+def mlp(widths, act_type="relu", name="mlp"):
+    """ Create a Keras multi-layer perceptron (MLP) model.
+
+    Arguments:
+        widths: A list of widths of each layer.
+        act_type: Activation type
+        name: Name of model
+
+    Returns:
+        a Keras model
+
+    Side effects:
+        None
+    """
+    model = tf.keras.Sequential(name=name)
+
+    for i in np.arange(len(widths) - 1):
+        model.add(tf.keras.layers.Dense(
+            widths[i],
+            name="%s_%d"%(name,i),
+            activation=act_type,
+            dtype=tf.float64,
+        ))
+
+    # apply last layer without any nonlinearity
+    model.add(tf.keras.layers.Dense(
+        widths[-1],
+        name="%s_%d"%(name,len(widths)),
+        activation=None,
+    ))
+    return model
 
 def weight_variable(shape, var_name, distribution='tn', scale=0.1):
     """Create a variable for a weight matrix.
@@ -102,17 +133,12 @@ def encoder(widths, dist_weights, dist_biases, scale, num_shifts_max):
     return x, weights, biases
 
 
-def encoder_apply(x, weights, biases, act_type, shifts_middle, name='E', num_encoder_weights=1):
+def encoder_apply(x, encoder, shifts_middle):
     """Apply an encoder to data x.
 
     Arguments:
         x -- placeholder for input
-        weights -- dictionary of weights
-        biases -- dictionary of biases
-        act_type -- string for activation type for nonlinear layers (i.e. sigmoid, relu, or elu)
         shifts_middle -- number of shifts (steps) in x to apply encoder to for linearity loss
-        name -- string for prefix on weight matrices (default 'E' for encoder)
-        num_encoder_weights -- number of weight matrices (layers) in encoder network (default 1)
 
     Returns:
         y -- list, output of encoder network applied to each time shift in input x
@@ -130,9 +156,8 @@ def encoder_apply(x, weights, biases, act_type, shifts_middle, name='E', num_enc
         if isinstance(x, (list,)):
             x_shift = x[shift]
         else:
-            x_shift = tf.squeeze(x[shift, :, :])
-        y.append(
-            encoder_apply_one_shift(x_shift, weights, biases, act_type, name, num_encoder_weights))
+            x_shift = x[shift, :, :]
+        y.append(encoder(x_shift))
     return y
 
 
@@ -432,18 +457,14 @@ def create_koopman_net(params):
     max_shifts_to_stack = helperfns.num_shifts_in_stack(params)
 
     encoder_widths = params['widths'][0:depth + 2]  # n ... k
-    x, weights, biases = encoder(encoder_widths, dist_weights=params['dist_weights'][0:depth + 1],
-                                 dist_biases=params['dist_biases'][0:depth + 1], scale=params['scale'],
-                                 num_shifts_max=max_shifts_to_stack)
-    params['num_encoder_weights'] = len(weights)
-    g_list = encoder_apply(x, weights, biases, params['act_type'], shifts_middle=params['shifts_middle'],
-                           num_encoder_weights=params['num_encoder_weights'])
+    encoder = mlp(encoder_widths, act_type=params["act_type"], name="encoder")
+
+    x = tf.compat.v1.placeholder(tf.float64, [max_shifts_to_stack + 1, None, encoder_widths[0]])
+    g_list = encoder_apply(x, encoder, shifts_middle=params['shifts_middle'])
 
     # g_list_omega is list of omegas, one entry for each middle_shift of x (like g_list)
-    omegas, weights_omega, biases_omega = create_omega_net(params, g_list[0])
+    omegas, weights, biases = create_omega_net(params, g_list[0])
     # params['num_omega_weights'] = len(weights_omega) already done inside create_omega_net
-    weights.update(weights_omega)
-    biases.update(biases_omega)
 
     num_widths = len(params['widths'])
     decoder_widths = params['widths'][depth + 2:num_widths]  # k ... n

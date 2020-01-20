@@ -8,6 +8,7 @@ import helperfns
 import networkarch as net
 
 tf.compat.v1.disable_eager_execution()
+tf.keras.backend.set_floatx('float64')
 
 def define_loss(x, y, g_list, weights, biases, params):
     """Define the (unregularized) loss functions for the training.
@@ -283,7 +284,7 @@ def try_net(data_val, params):
     params['time_exp'] = time.time() - start
     saver.restore(sess, params['model_path'])
     helperfns.save_files(sess, csv_path, train_val_error, params, weights, biases)
-    tf.reset_default_graph()
+    tf.compat.v1.reset_default_graph()
 
 
 def main_exp(params):
