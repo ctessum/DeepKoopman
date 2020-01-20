@@ -7,6 +7,7 @@ import tensorflow as tf
 import helperfns
 import networkarch as net
 
+tf.compat.v1.disable_eager_execution()
 
 def define_loss(x, y, g_list, weights, biases, params):
     """Define the (unregularized) loss functions for the training.
