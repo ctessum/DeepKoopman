@@ -468,17 +468,13 @@ def create_koopman_net(params):
 
     num_widths = len(params['widths'])
     decoder_widths = params['widths'][depth + 2:num_widths]  # k ... n
-    weights_decoder, biases_decoder = decoder(decoder_widths, dist_weights=params['dist_weights'][depth + 2:],
-                                              dist_biases=params['dist_biases'][depth + 2:],
-                                              scale=params['scale'])
-    weights.update(weights_decoder)
-    biases.update(biases_decoder)
+    decoder = mlp(decoder_widths, act_type=params["act_type"], name="decoder")
 
     y = []
     # y[0] is x[0,:,:] encoded and then decoded (no stepping forward)
     encoded_layer = g_list[0]
     params['num_decoder_weights'] = depth + 1
-    y.append(decoder_apply(encoded_layer, weights, biases, params['act_type'], params['num_decoder_weights']))
+    y.append(decoder(encoded_layer))
 
     # g_list_omega[0] is for x[0,:,:], pairs with g_list[0]=encoded_layer
     advanced_layer = varying_multiply(encoded_layer, omegas, params['delta_t'], params['num_real'],
@@ -487,7 +483,7 @@ def create_koopman_net(params):
     for j in np.arange(max(params['shifts'])):
         # considering penalty on subset of yk+1, yk+2, yk+3, ...
         if (j + 1) in params['shifts']:
-            y.append(decoder_apply(advanced_layer, weights, biases, params['act_type'], params['num_decoder_weights']))
+            y.append(decoder(advanced_layer))
 
         omegas = omega_net_apply(params, advanced_layer, weights, biases)
         advanced_layer = varying_multiply(advanced_layer, omegas, params['delta_t'], params['num_real'],
