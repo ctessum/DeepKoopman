@@ -35,103 +35,6 @@ def mlp(widths, act_type="relu", name="mlp"):
     ))
     return model
 
-def weight_variable(shape, var_name, distribution='tn', scale=0.1):
-    """Create a variable for a weight matrix.
-
-    Arguments:
-        shape -- array giving shape of output weight variable
-        var_name -- string naming weight variable
-        distribution -- string for which distribution to use for random initialization (default 'tn')
-        scale -- (for tn distribution): standard deviation of normal distribution before truncation (default 0.1)
-
-    Returns:
-        a TensorFlow variable for a weight matrix
-
-    Side effects:
-        None
-
-    Raises ValueError if distribution is filename but shape of data in file does not match input shape
-    """
-    if distribution == 'tn':
-        initial = tf.truncated_normal(shape, stddev=scale, dtype=tf.float64)
-    elif distribution == 'xavier':
-        scale = 4 * np.sqrt(6.0 / (shape[0] + shape[1]))
-        initial = tf.random_uniform(shape, minval=-scale, maxval=scale, dtype=tf.float64)
-    elif distribution == 'dl':
-        # see page 295 of Goodfellow et al's DL book
-        # divide by sqrt of m, where m is number of inputs
-        scale = 1.0 / np.sqrt(shape[0])
-        initial = tf.random.uniform(shape, minval=-scale, maxval=scale, dtype=tf.float64)
-    elif distribution == 'he':
-        # from He, et al. ICCV 2015 (referenced in Andrew Ng's class)
-        # divide by m, where m is number of inputs
-        scale = np.sqrt(2.0 / shape[0])
-        initial = tf.random_normal(shape, mean=0, stddev=scale, dtype=tf.float64)
-    elif distribution == 'glorot_bengio':
-        # see page 295 of Goodfellow et al's DL book
-        scale = np.sqrt(6.0 / (shape[0] + shape[1]))
-        initial = tf.random_uniform(shape, minval=-scale, maxval=scale, dtype=tf.float64)
-    else:
-        initial = np.loadtxt(distribution, delimiter=',', dtype=np.float64)
-        if (initial.shape[0] != shape[0]) or (initial.shape[1] != shape[1]):
-            raise ValueError(
-                'Initialization for %s is not correct shape. Expecting (%d,%d), but find (%d,%d) in %s.' % (
-                    var_name, shape[0], shape[1], initial.shape[0], initial.shape[1], distribution))
-    return tf.Variable(initial, name=var_name)
-
-
-def bias_variable(shape, var_name, distribution=''):
-    """Create a variable for a bias vector.
-
-    Arguments:
-        shape -- array giving shape of output bias variable
-        var_name -- string naming bias variable
-        distribution -- string for which distribution to use for random initialization (file name) (default '')
-
-    Returns:
-        a TensorFlow variable for a bias vector
-
-    Side effects:
-        None
-    """
-    if distribution:
-        initial = np.genfromtxt(distribution, delimiter=',', dtype=np.float64)
-    else:
-        initial = tf.constant(0.0, shape=shape, dtype=tf.float64)
-    return tf.Variable(initial, name=var_name)
-
-
-def encoder(widths, dist_weights, dist_biases, scale, num_shifts_max):
-    """Create an encoder network: an input placeholder x, dictionary of weights, and dictionary of biases.
-
-    Arguments:
-        widths -- array or list of widths for layers of network
-        dist_weights -- array or list of strings for distributions of weight matrices
-        dist_biases -- array or list of strings for distributions of bias vectors
-        scale -- (for tn distribution of weight matrices): standard deviation of normal distribution before truncation
-        num_shifts_max -- number of shifts (time steps) that losses will use (max of num_shifts and num_shifts_middle)
-
-    Returns:
-        x -- placeholder for input
-        weights -- dictionary of weights
-        biases -- dictionary of biases
-
-    Side effects:
-        None
-    """
-    x = tf.compat.v1.placeholder(tf.float64, [num_shifts_max + 1, None, widths[0]])
-
-    weights = dict()
-    biases = dict()
-
-    for i in np.arange(len(widths) - 1):
-        weights['WE%d' % (i + 1)] = weight_variable([widths[i], widths[i + 1]], var_name='WE%d' % (i + 1),
-                                                    distribution=dist_weights[i], scale=scale)
-        # TODO: first guess for biases too (and different ones for different weights)
-        biases['bE%d' % (i + 1)] = bias_variable([widths[i + 1], ], var_name='bE%d' % (i + 1),
-                                                 distribution=dist_biases[i])
-    return x, weights, biases
-
 
 def encoder_apply(x, encoder, shifts_middle):
     """Apply an encoder to data x.
@@ -159,96 +62,6 @@ def encoder_apply(x, encoder, shifts_middle):
             x_shift = x[shift, :, :]
         y.append(encoder(x_shift))
     return y
-
-
-def encoder_apply_one_shift(prev_layer, weights, biases, act_type, name='E', num_encoder_weights=1):
-    """Apply an encoder to data for only one time step (shift).
-
-    Arguments:
-        prev_layer -- input for a particular time step (shift)
-        weights -- dictionary of weights
-        biases -- dictionary of biases
-        act_type -- string for activation type for nonlinear layers (i.e. sigmoid, relu, or elu)
-        name -- string for prefix on weight matrices (default 'E' for encoder)
-        num_encoder_weights -- number of weight matrices (layers) in encoder network (default 1)
-
-    Returns:
-        final -- output of encoder network applied to input prev_layer (a particular time step / shift)
-
-    Side effects:
-        None
-    """
-    for i in np.arange(num_encoder_weights - 1):
-        prev_layer = tf.matmul(prev_layer, weights['W%s%d' % (name, i + 1)]) + biases['b%s%d' % (name, i + 1)]
-        if act_type == 'sigmoid':
-            prev_layer = tf.sigmoid(prev_layer)
-        elif act_type == 'relu':
-            prev_layer = tf.nn.relu(prev_layer)
-        elif act_type == 'elu':
-            prev_layer = tf.nn.elu(prev_layer)
-
-    # apply last layer without any nonlinearity
-    final = tf.matmul(prev_layer, weights['W%s%d' % (name, num_encoder_weights)]) + biases[
-        'b%s%d' % (name, num_encoder_weights)]
-
-    return final
-
-
-def decoder(widths, dist_weights, dist_biases, scale, name='D'):
-    """Create a decoder network: a dictionary of weights and a dictionary of biases.
-
-    Arguments:
-        widths -- array or list of widths for layers of network
-        dist_weights -- array or list of strings for distributions of weight matrices
-        dist_biases -- array or list of strings for distributions of bias vectors
-        scale -- (for tn distribution of weight matrices): standard deviation of normal distribution before truncation
-        name -- string for prefix on weight matrices (default 'D' for decoder)
-
-    Returns:
-        weights -- dictionary of weights
-        biases -- dictionary of biases
-
-    Side effects:
-        None
-    """
-    weights = dict()
-    biases = dict()
-    for i in np.arange(len(widths) - 1):
-        ind = i + 1
-        weights['W%s%d' % (name, ind)] = weight_variable([widths[i], widths[i + 1]], var_name='W%s%d' % (name, ind),
-                                                         distribution=dist_weights[ind - 1], scale=scale)
-        biases['b%s%d' % (name, ind)] = bias_variable([widths[i + 1], ], var_name='b%s%d' % (name, ind),
-                                                      distribution=dist_biases[ind - 1])
-    return weights, biases
-
-
-def decoder_apply(prev_layer, weights, biases, act_type, num_decoder_weights):
-    """Apply a decoder to data prev_layer
-
-    Arguments:
-        prev_layer -- input to decoder network
-        weights -- dictionary of weights
-        biases -- dictionary of biases
-        act_type -- string for activation type for nonlinear layers (i.e. sigmoid, relu, or elu)
-        num_decoder_weights -- number of weight matrices (layers) in decoder network
-
-    Returns:
-        output of decoder network applied to input prev_layer
-
-    Side effects:
-        None
-    """
-    for i in np.arange(num_decoder_weights - 1):
-        prev_layer = tf.matmul(prev_layer, weights['WD%d' % (i + 1)]) + biases['bD%d' % (i + 1)]
-        if act_type == 'sigmoid':
-            prev_layer = tf.sigmoid(prev_layer)
-        elif act_type == 'relu':
-            prev_layer = tf.nn.relu(prev_layer)
-        elif act_type == 'elu':
-            prev_layer = tf.nn.elu(prev_layer)
-
-    # apply last layer without any nonlinearity
-    return tf.matmul(prev_layer, weights['WD%d' % num_decoder_weights]) + biases['bD%d' % num_decoder_weights]
 
 
 def form_complex_conjugate_block(omegas, delta_t):
@@ -342,37 +155,18 @@ def create_omega_nets(params):
     omega_nets_real = []
 
     for j in np.arange(params['num_complex_pairs']):
-        omega_nets_complex.append(mlp(params['widths_omega_complex'], act_type=params["act_type"],
-                    name='OmegaComplex_%d' % (j + 1)))
+        omega_nets_complex.append(
+            mlp(params['widths_omega_complex'], act_type=params["act_type"],
+                    name='OmegaComplex_%d' % (j + 1))
+        )
 
     for j in np.arange(params['num_real']):
-        omega_nets_real.append(mlp(params['widths_omega_real'], act_type=params["act_type"],
-                    name='OmegaReal_%d' % (j + 1)))
-
+        omega_nets_real.append(
+            mlp(params['widths_omega_real'], act_type=params["act_type"],
+                    name='OmegaReal_%d' % (j + 1))
+        )
 
     return omega_nets_complex, omega_nets_real
-
-
-def create_one_omega_net(params, temp_name, weights, biases, widths):
-    """Create one auxiliary (omega) network for one real eigenvalue or a pair of complex conj. eigenvalues.
-
-    Arguments:
-        params -- dictionary of parameters for experiment
-        temp_name -- string for prefix on weight matrices, i.e. OC1 or OR1
-        weights -- dictionary of weights
-        biases -- dictionary of biases
-        widths -- array or list of widths for layers of network
-
-    Returns:
-        None
-
-    Side effects:
-        Updates weights and biases dictionaries
-    """
-    weightsO, biasesO = decoder(widths, dist_weights=params['dist_weights_omega'],
-                                dist_biases=params['dist_biases_omega'], scale=params['scale_omega'], name=temp_name)
-    weights.update(weightsO)
-    biases.update(biasesO)
 
 
 def omega_net_apply(params, ycoords, omega_nets_complex, omega_nets_real):
@@ -402,28 +196,6 @@ def omega_net_apply(params, ycoords, omega_nets_complex, omega_nets_real):
         one_column = ycoords[:, ind]
         omegas.append(omega_nets_real[j](one_column[:, np.newaxis]))
 
-    return omegas
-
-
-def omega_net_apply_one(params, ycoords, weights, biases, name):
-    """Apply one auxiliary (omega) network for one real eigenvalue or a pair of complex conj. eigenvalues.
-
-    Arguments:
-        params -- dictionary of parameters for experiment
-        ycoords -- array of shape [None, k] of y-coordinates, where L will be k x k
-        weights -- dictionary of weights
-        biases -- dictionary of biases
-        name -- string for prefix on weight matrices, i.e. OC1 or OR1
-
-    Returns:
-        omegas - output of one auxiliary (omega) network to input ycoords
-
-    Side effects:
-        None
-    """
-
-    omegas = encoder_apply_one_shift(ycoords, weights, biases, params['act_type'], name=name,
-                                     num_encoder_weights=params['num_omega_weights'])
     return omegas
 
 
