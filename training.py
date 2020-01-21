@@ -10,136 +10,6 @@ import networkarch as net
 tf.compat.v1.disable_eager_execution()
 tf.keras.backend.set_floatx('float64')
 
-def define_loss(x, y, g_list, deep_koop, params):
-    """Define the (unregularized) loss functions for the training.
-
-    Arguments:
-        x -- placeholder for input
-        y -- list of outputs of network for each shift (each prediction step)
-        g_list -- list of output of encoder for each shift (encoding each step in x)
-        weights -- dictionary of weights for all networks
-        biases -- dictionary of biases for all networks
-        params -- dictionary of parameters for experiment
-
-    Returns:
-        loss1 -- autoencoder loss function
-        loss2 -- dynamics/prediction loss function
-        loss3 -- linearity loss function
-        loss_Linf -- inf norm on autoencoder loss and one-step prediction loss
-        loss -- sum of above four losses
-
-    Side effects:
-        None
-    """
-    # Minimize the mean squared errors.
-    # subtraction and squaring element-wise, then average over both dimensions
-    # n columns
-    # average of each row (across columns), then average the rows
-    denominator_nonzero = 10 ** (-5)
-
-    # autoencoder loss
-    if params['relative_loss']:
-        loss1_denominator = tf.reduce_mean(tf.reduce_mean(tf.square(tf.squeeze(x[0, :, :])), 1)) + denominator_nonzero
-    else:
-        loss1_denominator = tf.cast(1.0, tf.float64)
-
-    mean_squared_error = tf.reduce_mean(tf.reduce_mean(tf.square(y[0] - tf.squeeze(x[0, :, :])), 1))
-    loss1 = params['recon_lam'] * tf.truediv(mean_squared_error, loss1_denominator)
-
-    # gets dynamics/prediction
-    loss2 = tf.zeros([1, ], dtype=tf.float64)
-    if params['num_shifts'] > 0:
-        for j in np.arange(params['num_shifts']):
-            # xk+1, xk+2, xk+3
-            shift = params['shifts'][j]
-            if params['relative_loss']:
-                loss2_denominator = tf.reduce_mean(
-                    tf.reduce_mean(tf.square(tf.squeeze(x[shift, :, :])), 1)) + denominator_nonzero
-            else:
-                loss2_denominator = tf.cast(1.0, tf.float64)
-            loss2 = loss2 + params['recon_lam'] * tf.truediv(
-                tf.reduce_mean(tf.reduce_mean(tf.square(y[j + 1] - tf.squeeze(x[shift, :, :])), 1)), loss2_denominator)
-        loss2 = loss2 / params['num_shifts']
-
-    # K linear
-    loss3 = tf.zeros([1, ], dtype=tf.float64)
-    count_shifts_middle = 0
-    if params['num_shifts_middle'] > 0:
-        # generalization of: next_step = tf.matmul(g_list[0], L_pow)
-        omegas = deep_koop.omega_net_apply(g_list[0])
-        next_step = net.varying_multiply(g_list[0], omegas, params['delta_t'], params['num_real'],
-                                         params['num_complex_pairs'])
-        # multiply g_list[0] by L (j+1) times
-        for j in np.arange(max(params['shifts_middle'])):
-            if (j + 1) in params['shifts_middle']:
-                if params['relative_loss']:
-                    loss3_denominator = tf.reduce_mean(
-                        tf.reduce_mean(tf.square(tf.squeeze(g_list[count_shifts_middle + 1])), 1)) + denominator_nonzero
-                else:
-                    loss3_denominator = tf.cast(1.0, tf.float64)
-                loss3 = loss3 + params['mid_shift_lam'] * tf.truediv(
-                    tf.reduce_mean(tf.reduce_mean(tf.square(next_step - g_list[count_shifts_middle + 1]), 1)),
-                    loss3_denominator)
-                count_shifts_middle += 1
-            omegas = deep_koop.omega_net_apply(next_step)
-            next_step = net.varying_multiply(next_step, omegas, params['delta_t'], params['num_real'],
-                                             params['num_complex_pairs'])
-
-        loss3 = loss3 / params['num_shifts_middle']
-
-    # inf norm on autoencoder error and one prediction step
-    if params['relative_loss']:
-        Linf1_den = tf.norm(tf.norm(tf.squeeze(x[0, :, :]), axis=1, ord=np.inf), ord=np.inf) + denominator_nonzero
-        Linf2_den = tf.norm(tf.norm(tf.squeeze(x[1, :, :]), axis=1, ord=np.inf), ord=np.inf) + denominator_nonzero
-    else:
-        Linf1_den = tf.cast(1.0, tf.float64)
-        Linf2_den = tf.cast(1.0, tf.float64)
-
-    Linf1_penalty = tf.truediv(
-        tf.norm(tf.norm(y[0] - tf.squeeze(x[0, :, :]), axis=1, ord=np.inf), ord=np.inf), Linf1_den)
-    Linf2_penalty = tf.truediv(
-        tf.norm(tf.norm(y[1] - tf.squeeze(x[1, :, :]), axis=1, ord=np.inf), ord=np.inf), Linf2_den)
-    loss_Linf = params['Linf_lam'] * (Linf1_penalty + Linf2_penalty)
-
-    loss = loss1 + loss2 + loss3 + loss_Linf
-
-    return loss1, loss2, loss3, loss_Linf, loss
-
-
-def define_regularization(params, trainable_var, loss, loss1):
-    """Define the regularization and add to loss.
-
-    Arguments:
-        params -- dictionary of parameters for experiment
-        trainable_var -- list of trainable TensorFlow variables
-        loss -- the unregularized loss
-        loss1 -- the autoenocder component of the loss
-
-    Returns:
-        loss_L1 -- L1 regularization on weights W and b
-        loss_L2 -- L2 regularization on weights W
-        regularized_loss -- loss + regularization
-        regularized_loss1 -- loss1 (autoencoder loss) + regularization
-
-    Side effects:
-        None
-    """
-    if params['L1_lam']:
-        l1_regularizer = tf.contrib.layers.l1_regularizer(scale=params['L1_lam'], scope=None)
-        # TODO: don't include biases? use weights dict instead?
-        loss_L1 = tf.contrib.layers.apply_regularization(l1_regularizer, weights_list=trainable_var)
-    else:
-        loss_L1 = tf.zeros([1, ], dtype=tf.float64)
-
-    # tf.nn.l2_loss returns number
-    l2_regularizer = tf.add_n([tf.nn.l2_loss(v) for v in trainable_var if 'b' not in v.name])
-    loss_L2 = params['L2_lam'] * l2_regularizer
-
-    regularized_loss = loss + loss_L1 + loss_L2
-    regularized_loss1 = loss1 + loss_L1 + loss_L2
-
-    return loss_L1, loss_L2, regularized_loss, regularized_loss1
-
 
 def try_net(data_val, params):
     """Run a random experiment for particular params and data.
@@ -162,16 +32,15 @@ def try_net(data_val, params):
     max_shifts_to_stack = helperfns.num_shifts_in_stack(params)
     x = tf.compat.v1.placeholder(tf.float64, [max_shifts_to_stack + 1, None, params['widths'][0]])
 
-    y, g_list = deep_koop(x)
+    y = deep_koop(x)
 
     # DEFINE LOSS FUNCTION
     trainable_var = tf.compat.v1.trainable_variables()
-    loss1, loss2, loss3, loss_Linf, loss = define_loss(x, y, g_list, deep_koop, params)
-    loss_L1, loss_L2, regularized_loss, regularized_loss1 = define_regularization(params, trainable_var, loss, loss1)
+    loss1, loss2, loss3, loss_Linf, loss = deep_koop.recon_loss(x, y), deep_koop.prediction_loss(x, y), deep_koop.linearity_loss(x, y), deep_koop.linf_loss(x, y), deep_koop.total_loss(x, y),
 
     # CHOOSE OPTIMIZATION ALGORITHM
-    optimizer = helperfns.choose_optimizer(params, regularized_loss, trainable_var)
-    optimizer_autoencoder = helperfns.choose_optimizer(params, regularized_loss1, trainable_var)
+    optimizer = helperfns.choose_optimizer(params, loss, trainable_var)
+    optimizer_autoencoder = helperfns.choose_optimizer(params, loss1, trainable_var)
 
     # LAUNCH GRAPH AND INITIALIZE
     sess = tf.compat.v1.Session()
@@ -238,35 +107,27 @@ def try_net(data_val, params):
             if step % 20 == 0:
                 train_error = sess.run(loss, feed_dict=feed_dict_train_loss)
                 val_error = sess.run(loss, feed_dict=feed_dict_val)
+                train_error, val_error = train_error.mean(), val_error.mean()
 
                 if val_error < (best_error - best_error * (10 ** (-5))):
                     best_error = val_error.copy()
                     saver.save(sess, params['model_path'])
-                    reg_train_err = sess.run(regularized_loss, feed_dict=feed_dict_train_loss)
-                    reg_val_err = sess.run(regularized_loss, feed_dict=feed_dict_val)
-                    print("New best val error %f (with reg. train err %f and reg. val err %f)" % (
-                        best_error, reg_train_err, reg_val_err))
+                    print("New best val error %f" % (best_error))
 
                 train_val_error[count, 0] = train_error
                 train_val_error[count, 1] = val_error
-                train_val_error[count, 2] = sess.run(regularized_loss, feed_dict=feed_dict_train_loss)
-                train_val_error[count, 3] = sess.run(regularized_loss, feed_dict=feed_dict_val)
-                train_val_error[count, 4] = sess.run(loss1, feed_dict=feed_dict_train_loss)
-                train_val_error[count, 5] = sess.run(loss1, feed_dict=feed_dict_val)
-                train_val_error[count, 6] = sess.run(loss2, feed_dict=feed_dict_train_loss)
-                train_val_error[count, 7] = sess.run(loss2, feed_dict=feed_dict_val)
-                train_val_error[count, 8] = sess.run(loss3, feed_dict=feed_dict_train_loss)
-                train_val_error[count, 9] = sess.run(loss3, feed_dict=feed_dict_val)
-                train_val_error[count, 10] = sess.run(loss_Linf, feed_dict=feed_dict_train_loss)
-                train_val_error[count, 11] = sess.run(loss_Linf, feed_dict=feed_dict_val)
+                train_val_error[count, 4] = sess.run(loss1, feed_dict=feed_dict_train_loss).mean()
+                train_val_error[count, 5] = sess.run(loss1, feed_dict=feed_dict_val).mean()
+                train_val_error[count, 6] = sess.run(loss2, feed_dict=feed_dict_train_loss).mean()
+                train_val_error[count, 7] = sess.run(loss2, feed_dict=feed_dict_val).mean()
+                train_val_error[count, 8] = sess.run(loss3, feed_dict=feed_dict_train_loss).mean()
+                train_val_error[count, 9] = sess.run(loss3, feed_dict=feed_dict_val).mean()
+                train_val_error[count, 10] = sess.run(loss_Linf, feed_dict=feed_dict_train_loss).mean()
+                train_val_error[count, 11] = sess.run(loss_Linf, feed_dict=feed_dict_val).mean()
                 if np.isnan(train_val_error[count, 10]):
                     params['stop_condition'] = 'loss_Linf is nan'
                     finished = 1
                     break
-                train_val_error[count, 12] = sess.run(loss_L1, feed_dict=feed_dict_train_loss)
-                train_val_error[count, 13] = sess.run(loss_L1, feed_dict=feed_dict_val)
-                train_val_error[count, 14] = sess.run(loss_L2, feed_dict=feed_dict_train_loss)
-                train_val_error[count, 15] = sess.run(loss_L2, feed_dict=feed_dict_val)
 
                 np.savetxt(csv_path, train_val_error, delimiter=',')
                 finished, save_now = helperfns.check_progress(start, best_error, params)

@@ -3,7 +3,7 @@ import tensorflow as tf
 
 import helperfns
 
-def mlp(widths, act_type="relu", name="mlp"):
+def mlp(widths, act_type="relu", name="mlp", l2=None):
     """ Create a Keras multi-layer perceptron (MLP) model.
 
     Arguments:
@@ -19,20 +19,15 @@ def mlp(widths, act_type="relu", name="mlp"):
     """
     model = tf.keras.Sequential(name=name)
 
-    for i in np.arange(len(widths) - 1):
+    for i in np.arange(len(widths)):
         model.add(tf.keras.layers.Dense(
             widths[i],
             name="%s_%d"%(name,i),
-            activation=act_type,
+            activation=None if i == len(widths)-1 else act_type, # Apply last layer without any nonlinearity
             dtype=tf.float64,
+            kernel_regularizer=tf.keras.regularizers.l2(l2) if l2 else None,
         ))
 
-    # apply last layer without any nonlinearity
-    model.add(tf.keras.layers.Dense(
-        widths[-1],
-        name="%s_%d"%(name,len(widths)),
-        activation=None,
-    ))
     return model
 
 class DeepKoopman(tf.keras.Model):
@@ -58,13 +53,13 @@ class DeepKoopman(tf.keras.Model):
         self.params = params
 
         encoder_widths = params['widths'][0:depth + 2]  # n ... k
-        self.encoder = mlp(encoder_widths, act_type=params["act_type"], name="encoder")
+        self.encoder = mlp(encoder_widths, act_type=params["act_type"], l2=params['L2_lam'], name="encoder")
 
         self.omega_nets_complex, self.omega_nets_real = create_omega_nets(params)
 
         num_widths = len(self.params['widths'])
         decoder_widths = self.params['widths'][depth + 2:num_widths]  # k ... n
-        self.decoder = mlp(decoder_widths, act_type=self.params["act_type"], name="decoder")
+        self.decoder = mlp(decoder_widths, act_type=self.params["act_type"], l2=params['L2_lam'], name="decoder")
 
     def call(self, inputs):
         """Call the model
@@ -109,7 +104,7 @@ class DeepKoopman(tf.keras.Model):
             raise ValueError(
                 'length(y) not proper length: check create_koopman_net code and how defined params[shifts] in experiment')
 
-        return y, g_list
+        return y
 
     def encoder_apply(self, x, shifts_middle):
         """Apply an encoder to data x.
@@ -163,6 +158,59 @@ class DeepKoopman(tf.keras.Model):
             omegas.append(self.omega_nets_real[j](one_column[:, np.newaxis]))
 
         return omegas
+
+    def recon_loss(self, x, y):
+        """Computes autoencoder reconstruction loss mean squared error.
+        """
+        return tf.keras.losses.mean_squared_error(x[0, ...], y[0])
+
+    def prediction_loss(self, x, y):
+        """ Computes dynamics/prediction loss mean squared error.
+        """
+        for j in np.arange(self.params['num_shifts']):
+            shift = self.params['shifts'][j]
+            # xk+1, xk+2, xk+3
+            if j==0: loss = tf.keras.losses.mean_squared_error(x[shift, ...], y[j + 1])
+            else:
+                loss = loss + tf.keras.losses.mean_squared_error(x[shift, ...], y[j + 1])
+        return loss / self.params['num_shifts']
+
+    def linearity_loss(self, x, y):
+        """ Computes K linearity loss mean squared error.
+        """
+        count_shifts_middle = 0
+        g_list = self.encoder_apply(x, shifts_middle=self.params['shifts_middle'])
+        # generalization of: next_step = tf.matmul(g_list[0], L_pow)
+        omegas = self.omega_net_apply(g_list[0])
+        next_step = varying_multiply(g_list[0], omegas, self.params['delta_t'], self.params['num_real'],
+                                         self.params['num_complex_pairs'])
+        loss = None
+        # multiply g_list[0] by L (j+1) times
+        for j in np.arange(max(self.params['shifts_middle'])):
+            if (j + 1) in self.params['shifts_middle']:
+                if loss==None: loss = tf.keras.losses.mean_squared_error(g_list[count_shifts_middle + 1], next_step)
+                else: loss = loss + tf.keras.losses.mean_squared_error(g_list[count_shifts_middle + 1], next_step)
+                count_shifts_middle += 1
+            omegas = self.omega_net_apply(next_step)
+            next_step = varying_multiply(next_step, omegas, self.params['delta_t'], self.params['num_real'],
+                                             self.params['num_complex_pairs'])
+
+        return loss / self.params['num_shifts_middle']
+
+    def linf_loss(self, x, y):
+        """ Computes inf norm on autoencoder loss and one-step prediction loss.
+        """
+        Linf1_penalty = tf.norm(tf.norm(y[0] - tf.squeeze(x[0, :, :]), axis=1, ord=np.inf), ord=np.inf)
+        Linf2_penalty = tf.norm(tf.norm(y[1] - tf.squeeze(x[1, :, :]), axis=1, ord=np.inf), ord=np.inf)
+        return Linf1_penalty + Linf2_penalty
+
+    def total_loss(self, x, y):
+        """ Computes total loss.
+        """
+        return self.params['recon_lam'] * self.recon_loss(x, y) + \
+            self.params['recon_lam'] * self.prediction_loss(x, y) + \
+            self.params['mid_shift_lam'] * self.linearity_loss(x, y) + \
+            self.params['Linf_lam'] * self.linf_loss(x, y)
 
 
 def form_complex_conjugate_block(omegas, delta_t):
@@ -257,13 +305,13 @@ def create_omega_nets(params):
     for j in np.arange(params['num_complex_pairs']):
         omega_nets_complex.append(
             mlp(params['widths_omega_complex'], act_type=params["act_type"],
-                    name='OmegaComplex_%d' % (j + 1))
+                    name='OmegaComplex_%d' % (j + 1), l2=params['L2_lam'])
         )
 
     for j in np.arange(params['num_real']):
         omega_nets_real.append(
             mlp(params['widths_omega_real'], act_type=params["act_type"],
-                    name='OmegaReal_%d' % (j + 1))
+                    name='OmegaReal_%d' % (j + 1), l2=params['L2_lam'])
         )
 
     return omega_nets_complex, omega_nets_real
