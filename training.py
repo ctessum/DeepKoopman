@@ -10,7 +10,7 @@ import networkarch as net
 tf.compat.v1.disable_eager_execution()
 tf.keras.backend.set_floatx('float64')
 
-def define_loss(x, y, g_list, weights, biases, params):
+def define_loss(x, y, g_list, omega_nets_complex, omega_nets_real, params):
     """Define the (unregularized) loss functions for the training.
 
     Arguments:
@@ -66,7 +66,7 @@ def define_loss(x, y, g_list, weights, biases, params):
     count_shifts_middle = 0
     if params['num_shifts_middle'] > 0:
         # generalization of: next_step = tf.matmul(g_list[0], L_pow)
-        omegas = net.omega_net_apply(params, g_list[0], weights, biases)
+        omegas = net.omega_net_apply(params, g_list[0], omega_nets_complex, omega_nets_real)
         next_step = net.varying_multiply(g_list[0], omegas, params['delta_t'], params['num_real'],
                                          params['num_complex_pairs'])
         # multiply g_list[0] by L (j+1) times
@@ -81,7 +81,7 @@ def define_loss(x, y, g_list, weights, biases, params):
                     tf.reduce_mean(tf.reduce_mean(tf.square(next_step - g_list[count_shifts_middle + 1]), 1)),
                     loss3_denominator)
                 count_shifts_middle += 1
-            omegas = net.omega_net_apply(params, next_step, weights, biases)
+            omegas = net.omega_net_apply(params, next_step, omega_nets_complex, omega_nets_real)
             next_step = net.varying_multiply(next_step, omegas, params['delta_t'], params['num_real'],
                                              params['num_complex_pairs'])
 
@@ -157,13 +157,13 @@ def try_net(data_val, params):
         Builds TensorFlow graph (reset in main_exp)
     """
     # SET UP NETWORK
-    x, y, g_list, weights, biases = net.create_koopman_net(params)
+    x, y, g_list, omega_nets_complex, omega_nets_real = net.create_koopman_net(params)
 
     max_shifts_to_stack = helperfns.num_shifts_in_stack(params)
 
     # DEFINE LOSS FUNCTION
     trainable_var = tf.compat.v1.trainable_variables()
-    loss1, loss2, loss3, loss_Linf, loss = define_loss(x, y, g_list, weights, biases, params)
+    loss1, loss2, loss3, loss_Linf, loss = define_loss(x, y, g_list, omega_nets_complex, omega_nets_real, params)
     loss_L1, loss_L2, regularized_loss, regularized_loss1 = define_regularization(params, trainable_var, loss, loss1)
 
     # CHOOSE OPTIMIZATION ALGORITHM

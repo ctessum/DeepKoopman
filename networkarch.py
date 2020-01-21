@@ -324,7 +324,7 @@ def varying_multiply(y, omegas, delta_t, num_real, num_complex_pairs):
         return real_part
 
 
-def create_omega_net(params, ycoords):
+def create_omega_nets(params):
     """Create the auxiliary (omega) network(s), which have ycoords as input and output omegas (parameters for L).
 
     Arguments:
@@ -332,29 +332,25 @@ def create_omega_net(params, ycoords):
         ycoords -- array of shape [None, k] of y-coordinates, where L will be k x k
 
     Returns:
-        omegas -- list, output of omega (auxiliary) network(s) applied to input ycoords
-        weights -- dictionary of weights
-        biases -- dictionary of biases
+        omega_nets_complex -- list,  complex conjugate pair omega (auxiliary) network(s)
+        omega_nets_real -- list, real omega (auxiliary) network(s)
 
     Side effects:
-        Adds 'num_omega_weights' key to params dict
+        None
     """
-    weights = dict()
-    biases = dict()
+    omega_nets_complex = []
+    omega_nets_real = []
 
     for j in np.arange(params['num_complex_pairs']):
-        temp_name = 'OC%d_' % (j + 1)
-        create_one_omega_net(params, temp_name, weights, biases, params['widths_omega_complex'])
+        omega_nets_complex.append(mlp(params['widths_omega_complex'], act_type=params["act_type"],
+                    name='OmegaComplex_%d' % (j + 1)))
 
     for j in np.arange(params['num_real']):
-        temp_name = 'OR%d_' % (j + 1)
-        create_one_omega_net(params, temp_name, weights, biases, params['widths_omega_real'])
+        omega_nets_real.append(mlp(params['widths_omega_real'], act_type=params["act_type"],
+                    name='OmegaReal_%d' % (j + 1)))
 
-    params['num_omega_weights'] = len(params['widths_omega_real']) - 1
 
-    omegas = omega_net_apply(params, ycoords, weights, biases)
-
-    return omegas, weights, biases
+    return omega_nets_complex, omega_nets_real
 
 
 def create_one_omega_net(params, temp_name, weights, biases, widths):
@@ -379,7 +375,7 @@ def create_one_omega_net(params, temp_name, weights, biases, widths):
     biases.update(biasesO)
 
 
-def omega_net_apply(params, ycoords, weights, biases):
+def omega_net_apply(params, ycoords, omega_nets_complex, omega_nets_real):
     """Apply the omega (auxiliary) network(s) to the y-coordinates.
 
     Arguments:
@@ -396,18 +392,15 @@ def omega_net_apply(params, ycoords, weights, biases):
     """
     omegas = []
     for j in np.arange(params['num_complex_pairs']):
-        temp_name = 'OC%d_' % (j + 1)
         ind = 2 * j
         pair_of_columns = ycoords[:, ind:ind + 2]
         radius_of_pair = tf.reduce_sum(tf.square(pair_of_columns), axis=1, keepdims=True)
-        omegas.append(
-            omega_net_apply_one(params, radius_of_pair, weights, biases, temp_name))
+        omegas.append(omega_nets_complex[j](radius_of_pair))
     for j in np.arange(params['num_real']):
         temp_name = 'OR%d_' % (j + 1)
         ind = 2 * params['num_complex_pairs'] + j
         one_column = ycoords[:, ind]
-        omegas.append(
-            omega_net_apply_one(params, one_column[:, np.newaxis], weights, biases, temp_name))
+        omegas.append(omega_nets_real[j](one_column[:, np.newaxis]))
 
     return omegas
 
@@ -462,9 +455,8 @@ def create_koopman_net(params):
     x = tf.compat.v1.placeholder(tf.float64, [max_shifts_to_stack + 1, None, encoder_widths[0]])
     g_list = encoder_apply(x, encoder, shifts_middle=params['shifts_middle'])
 
-    # g_list_omega is list of omegas, one entry for each middle_shift of x (like g_list)
-    omegas, weights, biases = create_omega_net(params, g_list[0])
-    # params['num_omega_weights'] = len(weights_omega) already done inside create_omega_net
+    omega_nets_complex, omega_nets_real = create_omega_nets(params)
+    omegas = omega_net_apply(params, g_list[0], omega_nets_complex, omega_nets_real)
 
     num_widths = len(params['widths'])
     decoder_widths = params['widths'][depth + 2:num_widths]  # k ... n
@@ -485,7 +477,7 @@ def create_koopman_net(params):
         if (j + 1) in params['shifts']:
             y.append(decoder(advanced_layer))
 
-        omegas = omega_net_apply(params, advanced_layer, weights, biases)
+        omegas = omega_net_apply(params, advanced_layer, omega_nets_complex, omega_nets_real)
         advanced_layer = varying_multiply(advanced_layer, omegas, params['delta_t'], params['num_real'],
                                           params['num_complex_pairs'])
 
@@ -494,4 +486,4 @@ def create_koopman_net(params):
         raise ValueError(
             'length(y) not proper length: check create_koopman_net code and how defined params[shifts] in experiment')
 
-    return x, y, g_list, weights, biases
+    return x, y, g_list, omega_nets_complex, omega_nets_real
