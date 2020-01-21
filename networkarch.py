@@ -35,33 +35,128 @@ def mlp(widths, act_type="relu", name="mlp"):
     ))
     return model
 
+class DeepKoopman(tf.keras.Model):
 
-def encoder_apply(x, encoder, shifts_middle):
-    """Apply an encoder to data x.
+    def __init__(self, params):
+        """Create a Koopman network that encodes, advances in time, and decodes.
 
-    Arguments:
-        x -- placeholder for input
-        shifts_middle -- number of shifts (steps) in x to apply encoder to for linearity loss
+        Arguments:
+            params -- dictionary of parameters for experiment
 
-    Returns:
-        y -- list, output of encoder network applied to each time shift in input x
+        Returns:
+            x -- placeholder for input
+            y -- list, output of decoder applied to each shift: g_list[0], K*g_list[0], K^2*g_list[0], ..., length num_shifts + 1
+            g_list -- list, output of encoder applied to each shift in input x, length num_shifts_middle + 1
+            weights -- dictionary of weights
+            biases -- dictionary of biases
 
-    Side effects:
-        None
-    """
-    y = []
-    num_shifts_middle = len(shifts_middle)
-    for j in np.arange(num_shifts_middle + 1):
-        if j == 0:
-            shift = 0
-        else:
-            shift = shifts_middle[j - 1]
-        if isinstance(x, (list,)):
-            x_shift = x[shift]
-        else:
-            x_shift = x[shift, :, :]
-        y.append(encoder(x_shift))
-    return y
+        Side effects:
+            Adds more entries to params dict: num_encoder_weights, num_omega_weights, num_decoder_weights
+
+        Raises ValueError if len(y) is not len(params['shifts']) + 1
+        """
+        super(DeepKoopman, self).__init__()
+
+        depth = int((params['d'] - 4) / 2)
+
+        max_shifts_to_stack = helperfns.num_shifts_in_stack(params)
+        self.params = params
+
+        encoder_widths = params['widths'][0:depth + 2]  # n ... k
+        self.encoder = mlp(encoder_widths, act_type=params["act_type"], name="encoder")
+
+        self.omega_nets_complex, self.omega_nets_real = create_omega_nets(params)
+
+        num_widths = len(self.params['widths'])
+        decoder_widths = self.params['widths'][depth + 2:num_widths]  # k ... n
+        self.decoder = mlp(decoder_widths, act_type=self.params["act_type"], name="decoder")
+
+    def call(self, inputs):
+        g_list = self.encoder_apply(inputs, shifts_middle=self.params['shifts_middle'])
+        omegas = self.omega_net_apply(g_list[0])
+
+        y = []
+        # y[0] is x[0,:,:] encoded and then decoded (no stepping forward)
+        encoded_layer = g_list[0]
+        depth = int((self.params['d'] - 4) / 2)
+        self.params['num_decoder_weights'] = depth + 1
+        y.append(self.decoder(encoded_layer))
+
+        # g_list_omega[0] is for x[0,:,:], pairs with g_list[0]=encoded_layer
+        advanced_layer = varying_multiply(encoded_layer, omegas, self.params['delta_t'], self.params['num_real'],
+                                          self.params['num_complex_pairs'])
+
+        for j in np.arange(max(self.params['shifts'])):
+            # considering penalty on subset of yk+1, yk+2, yk+3, ...
+            if (j + 1) in self.params['shifts']:
+                y.append(self.decoder(advanced_layer))
+
+            omegas = self.omega_net_apply(advanced_layer)
+            advanced_layer = varying_multiply(advanced_layer, omegas, self.params['delta_t'], self.params['num_real'],
+                                              self.params['num_complex_pairs'])
+
+        if len(y) != (len(self.params['shifts']) + 1):
+            print("messed up looping over shifts! %r" % self.params['shifts'])
+            raise ValueError(
+                'length(y) not proper length: check create_koopman_net code and how defined params[shifts] in experiment')
+
+        return y, g_list
+
+    def encoder_apply(self, x, shifts_middle):
+        """Apply an encoder to data x.
+
+        Arguments:
+            x -- placeholder for input
+            shifts_middle -- number of shifts (steps) in x to apply encoder to for linearity loss
+
+        Returns:
+            y -- list, output of encoder network applied to each time shift in input x
+
+        Side effects:
+            None
+        """
+        y = []
+        num_shifts_middle = len(shifts_middle)
+        for j in np.arange(num_shifts_middle + 1):
+            if j == 0:
+                shift = 0
+            else:
+                shift = shifts_middle[j - 1]
+            if isinstance(x, (list,)):
+                x_shift = x[shift]
+            else:
+                x_shift = x[shift, :, :]
+            y.append(self.encoder(x_shift))
+        return y
+
+    def omega_net_apply(self, ycoords):
+        """Apply the omega (auxiliary) network(s) to the y-coordinates.
+
+        Arguments:
+            params -- dictionary of parameters for experiment
+            ycoords -- array of shape [None, k] of y-coordinates, where L will be k x k
+            weights -- dictionary of weights
+            biases -- dictionary of biases
+
+        Returns:
+            omegas -- list, output of omega (auxiliary) network(s) applied to input ycoords
+
+        Side effects:
+            None
+        """
+        omegas = []
+        for j in np.arange(self.params['num_complex_pairs']):
+            ind = 2 * j
+            pair_of_columns = ycoords[:, ind:ind + 2]
+            radius_of_pair = tf.reduce_sum(tf.square(pair_of_columns), axis=1, keepdims=True)
+            omegas.append(self.omega_nets_complex[j](radius_of_pair))
+        for j in np.arange(self.params['num_real']):
+            temp_name = 'OR%d_' % (j + 1)
+            ind = 2 * self.params['num_complex_pairs'] + j
+            one_column = ycoords[:, ind]
+            omegas.append(self.omega_nets_real[j](one_column[:, np.newaxis]))
+
+        return omegas
 
 
 def form_complex_conjugate_block(omegas, delta_t):
@@ -167,95 +262,3 @@ def create_omega_nets(params):
         )
 
     return omega_nets_complex, omega_nets_real
-
-
-def omega_net_apply(params, ycoords, omega_nets_complex, omega_nets_real):
-    """Apply the omega (auxiliary) network(s) to the y-coordinates.
-
-    Arguments:
-        params -- dictionary of parameters for experiment
-        ycoords -- array of shape [None, k] of y-coordinates, where L will be k x k
-        weights -- dictionary of weights
-        biases -- dictionary of biases
-
-    Returns:
-        omegas -- list, output of omega (auxiliary) network(s) applied to input ycoords
-
-    Side effects:
-        None
-    """
-    omegas = []
-    for j in np.arange(params['num_complex_pairs']):
-        ind = 2 * j
-        pair_of_columns = ycoords[:, ind:ind + 2]
-        radius_of_pair = tf.reduce_sum(tf.square(pair_of_columns), axis=1, keepdims=True)
-        omegas.append(omega_nets_complex[j](radius_of_pair))
-    for j in np.arange(params['num_real']):
-        temp_name = 'OR%d_' % (j + 1)
-        ind = 2 * params['num_complex_pairs'] + j
-        one_column = ycoords[:, ind]
-        omegas.append(omega_nets_real[j](one_column[:, np.newaxis]))
-
-    return omegas
-
-
-def create_koopman_net(params):
-    """Create a Koopman network that encodes, advances in time, and decodes.
-
-    Arguments:
-        params -- dictionary of parameters for experiment
-
-    Returns:
-        x -- placeholder for input
-        y -- list, output of decoder applied to each shift: g_list[0], K*g_list[0], K^2*g_list[0], ..., length num_shifts + 1
-        g_list -- list, output of encoder applied to each shift in input x, length num_shifts_middle + 1
-        weights -- dictionary of weights
-        biases -- dictionary of biases
-
-    Side effects:
-        Adds more entries to params dict: num_encoder_weights, num_omega_weights, num_decoder_weights
-
-    Raises ValueError if len(y) is not len(params['shifts']) + 1
-    """
-    depth = int((params['d'] - 4) / 2)
-
-    max_shifts_to_stack = helperfns.num_shifts_in_stack(params)
-
-    encoder_widths = params['widths'][0:depth + 2]  # n ... k
-    encoder = mlp(encoder_widths, act_type=params["act_type"], name="encoder")
-
-    x = tf.compat.v1.placeholder(tf.float64, [max_shifts_to_stack + 1, None, encoder_widths[0]])
-    g_list = encoder_apply(x, encoder, shifts_middle=params['shifts_middle'])
-
-    omega_nets_complex, omega_nets_real = create_omega_nets(params)
-    omegas = omega_net_apply(params, g_list[0], omega_nets_complex, omega_nets_real)
-
-    num_widths = len(params['widths'])
-    decoder_widths = params['widths'][depth + 2:num_widths]  # k ... n
-    decoder = mlp(decoder_widths, act_type=params["act_type"], name="decoder")
-
-    y = []
-    # y[0] is x[0,:,:] encoded and then decoded (no stepping forward)
-    encoded_layer = g_list[0]
-    params['num_decoder_weights'] = depth + 1
-    y.append(decoder(encoded_layer))
-
-    # g_list_omega[0] is for x[0,:,:], pairs with g_list[0]=encoded_layer
-    advanced_layer = varying_multiply(encoded_layer, omegas, params['delta_t'], params['num_real'],
-                                      params['num_complex_pairs'])
-
-    for j in np.arange(max(params['shifts'])):
-        # considering penalty on subset of yk+1, yk+2, yk+3, ...
-        if (j + 1) in params['shifts']:
-            y.append(decoder(advanced_layer))
-
-        omegas = omega_net_apply(params, advanced_layer, omega_nets_complex, omega_nets_real)
-        advanced_layer = varying_multiply(advanced_layer, omegas, params['delta_t'], params['num_real'],
-                                          params['num_complex_pairs'])
-
-    if len(y) != (len(params['shifts']) + 1):
-        print("messed up looping over shifts! %r" % params['shifts'])
-        raise ValueError(
-            'length(y) not proper length: check create_koopman_net code and how defined params[shifts] in experiment')
-
-    return x, y, g_list, omega_nets_complex, omega_nets_real
