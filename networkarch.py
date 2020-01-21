@@ -44,14 +44,9 @@ class DeepKoopman(tf.keras.Model):
             params -- dictionary of parameters for experiment
 
         Returns:
-            x -- placeholder for input
-            y -- list, output of decoder applied to each shift: g_list[0], K*g_list[0], K^2*g_list[0], ..., length num_shifts + 1
-            g_list -- list, output of encoder applied to each shift in input x, length num_shifts_middle + 1
-            weights -- dictionary of weights
-            biases -- dictionary of biases
 
         Side effects:
-            Adds more entries to params dict: num_encoder_weights, num_omega_weights, num_decoder_weights
+            None
 
         Raises ValueError if len(y) is not len(params['shifts']) + 1
         """
@@ -72,6 +67,20 @@ class DeepKoopman(tf.keras.Model):
         self.decoder = mlp(decoder_widths, act_type=self.params["act_type"], name="decoder")
 
     def call(self, inputs):
+        """Call the model
+
+        Arguments:
+            inputs -- input tensor, shape = [num_shifts, batch_size, num_vars]
+
+        Returns:
+            y -- list, output of decoder applied to each shift: g_list[0], K*g_list[0], K^2*g_list[0], ..., length num_shifts + 1
+            g_list -- list, output of encoder applied to each shift in input x, length num_shifts_middle + 1
+
+        Side effects:
+            Adds more entries to params dict: num_encoder_weights, num_omega_weights, num_decoder_weights
+
+        Raises ValueError if len(y) is not len(params['shifts']) + 1
+        """
         g_list = self.encoder_apply(inputs, shifts_middle=self.params['shifts_middle'])
         omegas = self.omega_net_apply(g_list[0])
 
@@ -133,10 +142,7 @@ class DeepKoopman(tf.keras.Model):
         """Apply the omega (auxiliary) network(s) to the y-coordinates.
 
         Arguments:
-            params -- dictionary of parameters for experiment
             ycoords -- array of shape [None, k] of y-coordinates, where L will be k x k
-            weights -- dictionary of weights
-            biases -- dictionary of biases
 
         Returns:
             omegas -- list, output of omega (auxiliary) network(s) applied to input ycoords
@@ -237,7 +243,6 @@ def create_omega_nets(params):
 
     Arguments:
         params -- dictionary of parameters for experiment
-        ycoords -- array of shape [None, k] of y-coordinates, where L will be k x k
 
     Returns:
         omega_nets_complex -- list,  complex conjugate pair omega (auxiliary) network(s)
