@@ -65,23 +65,23 @@ class DeepKoopman(tf.keras.Model):
         """Call the model
 
         Arguments:
-            inputs -- input tensor, shape = [num_shifts, batch_size, num_vars]
+            inputs -- input tensor, shape = [batch_size, num_shifts, num_vars]
 
         Returns:
-            y -- list, output of decoder applied to each shift: g_list[0], K*g_list[0], K^2*g_list[0], ..., length num_shifts + 1
-            g_list -- list, output of encoder applied to each shift in input x, length num_shifts_middle + 1
+            y -- list, output of decoder applied to each shift: encoded_x[0], K*encoded_x[0], K^2*encoded_x[0], ..., length num_shifts + 1
+                    shape = [batch_size, num_shifts+1, num_vars]
 
         Side effects:
             Adds more entries to params dict: num_encoder_weights, num_omega_weights, num_decoder_weights
 
         Raises ValueError if len(y) is not len(params['shifts']) + 1
         """
-        g_list = self.encoder_apply(inputs, shifts_middle=self.params['shifts_middle'])
-        omegas = self.omega_net_apply(g_list[0])
+        x_encoded = self.encoder_apply(inputs, shifts_middle=self.params['shifts_middle'])
+        encoded_layer = x_encoded[0,...]
+        omegas = self.omega_net_apply(encoded_layer)
 
         y = []
         # y[0] is x[0,:,:] encoded and then decoded (no stepping forward)
-        encoded_layer = g_list[0]
         depth = int((self.params['d'] - 4) / 2)
         self.params['num_decoder_weights'] = depth + 1
         y.append(self.decoder(encoded_layer))
@@ -104,7 +104,7 @@ class DeepKoopman(tf.keras.Model):
             raise ValueError(
                 'length(y) not proper length: check create_koopman_net code and how defined params[shifts] in experiment')
 
-        return y
+        return tf.stack(y, axis=1, name="decoded_predictions")
 
     def encoder_apply(self, x, shifts_middle):
         """Apply an encoder to data x.
@@ -114,7 +114,7 @@ class DeepKoopman(tf.keras.Model):
             shifts_middle -- number of shifts (steps) in x to apply encoder to for linearity loss
 
         Returns:
-            y -- list, output of encoder network applied to each time shift in input x
+            y -- output of encoder network applied to each time shift in input x, shape = [num_shifts, batch_size, num_vars]
 
         Side effects:
             None
@@ -126,12 +126,9 @@ class DeepKoopman(tf.keras.Model):
                 shift = 0
             else:
                 shift = shifts_middle[j - 1]
-            if isinstance(x, (list,)):
-                x_shift = x[shift]
-            else:
-                x_shift = x[shift, :, :]
+            x_shift = x[:, shift, :]
             y.append(self.encoder(x_shift))
-        return y
+        return tf.stack(y, axis=0, name="encoded_shifts")
 
     def omega_net_apply(self, ycoords):
         """Apply the omega (auxiliary) network(s) to the y-coordinates.
@@ -162,7 +159,7 @@ class DeepKoopman(tf.keras.Model):
     def recon_loss(self, x, y):
         """Computes autoencoder reconstruction loss mean squared error.
         """
-        return tf.keras.losses.mean_squared_error(x[0, ...], y[0])
+        return tf.keras.losses.mean_squared_error(x[:, 0, :], y[:, 0, :])
 
     def prediction_loss(self, x, y):
         """ Computes dynamics/prediction loss mean squared error.
@@ -170,9 +167,9 @@ class DeepKoopman(tf.keras.Model):
         for j in np.arange(self.params['num_shifts']):
             shift = self.params['shifts'][j]
             # xk+1, xk+2, xk+3
-            if j==0: loss = tf.keras.losses.mean_squared_error(x[shift, ...], y[j + 1])
+            if j==0: loss = tf.keras.losses.mean_squared_error(x[:, shift, :], y[:, j + 1, :])
             else:
-                loss = loss + tf.keras.losses.mean_squared_error(x[shift, ...], y[j + 1])
+                loss = loss + tf.keras.losses.mean_squared_error(x[:, shift, :], y[:, j + 1, :])
         return loss / self.params['num_shifts']
 
     def linearity_loss(self, x, y):
@@ -181,15 +178,15 @@ class DeepKoopman(tf.keras.Model):
         count_shifts_middle = 0
         g_list = self.encoder_apply(x, shifts_middle=self.params['shifts_middle'])
         # generalization of: next_step = tf.matmul(g_list[0], L_pow)
-        omegas = self.omega_net_apply(g_list[0])
-        next_step = varying_multiply(g_list[0], omegas, self.params['delta_t'], self.params['num_real'],
+        omegas = self.omega_net_apply(g_list[0, ...])
+        next_step = varying_multiply(g_list[0, ...], omegas, self.params['delta_t'], self.params['num_real'],
                                          self.params['num_complex_pairs'])
         loss = None
         # multiply g_list[0] by L (j+1) times
         for j in np.arange(max(self.params['shifts_middle'])):
             if (j + 1) in self.params['shifts_middle']:
-                if loss==None: loss = tf.keras.losses.mean_squared_error(g_list[count_shifts_middle + 1], next_step)
-                else: loss = loss + tf.keras.losses.mean_squared_error(g_list[count_shifts_middle + 1], next_step)
+                if loss==None: loss = tf.keras.losses.mean_squared_error(g_list[count_shifts_middle + 1, ...], next_step)
+                else: loss = loss + tf.keras.losses.mean_squared_error(g_list[count_shifts_middle + 1, ...], next_step)
                 count_shifts_middle += 1
             omegas = self.omega_net_apply(next_step)
             next_step = varying_multiply(next_step, omegas, self.params['delta_t'], self.params['num_real'],
@@ -200,8 +197,8 @@ class DeepKoopman(tf.keras.Model):
     def linf_loss(self, x, y):
         """ Computes inf norm on autoencoder loss and one-step prediction loss.
         """
-        Linf1_penalty = tf.norm(tf.norm(y[0] - tf.squeeze(x[0, :, :]), axis=1, ord=np.inf), ord=np.inf)
-        Linf2_penalty = tf.norm(tf.norm(y[1] - tf.squeeze(x[1, :, :]), axis=1, ord=np.inf), ord=np.inf)
+        Linf1_penalty = tf.norm(tf.norm(y[:, 0, :] - tf.squeeze(x[:, 0, :]), axis=1, ord=np.inf), ord=np.inf)
+        Linf2_penalty = tf.norm(tf.norm(y[:, 1, :] - tf.squeeze(x[:, 1, :]), axis=1, ord=np.inf), ord=np.inf)
         return Linf1_penalty + Linf2_penalty
 
     def total_loss(self, x, y):

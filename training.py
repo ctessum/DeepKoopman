@@ -7,7 +7,7 @@ import tensorflow as tf
 import helperfns
 import networkarch as net
 
-tf.compat.v1.disable_eager_execution()
+#tf.compat.v1.disable_eager_execution()
 tf.keras.backend.set_floatx('float64')
 
 
@@ -30,17 +30,39 @@ def try_net(data_val, params):
     deep_koop = net.DeepKoopman(params)
 
     max_shifts_to_stack = helperfns.num_shifts_in_stack(params)
-    x = tf.compat.v1.placeholder(tf.float64, [max_shifts_to_stack + 1, None, params['widths'][0]])
 
-    y = deep_koop(x)
+    #x = tf.compat.v1.placeholder(tf.float64, [max_shifts_to_stack + 1, None, params['widths'][0]])
+    #y = deep_koop(x,)
+
 
     # DEFINE LOSS FUNCTION
-    trainable_var = tf.compat.v1.trainable_variables()
-    loss1, loss2, loss3, loss_Linf, loss = deep_koop.recon_loss(x, y), deep_koop.prediction_loss(x, y), deep_koop.linearity_loss(x, y), deep_koop.linf_loss(x, y), deep_koop.total_loss(x, y),
+    #trainable_var = tf.compat.v1.trainable_variables()
+    #loss1, loss2, loss3, loss_Linf, loss = deep_koop.recon_loss(x, y), deep_koop.prediction_loss(x, y), deep_koop.linearity_loss(x, y), deep_koop.linf_loss(x, y), deep_koop.total_loss(x, y),
 
     # CHOOSE OPTIMIZATION ALGORITHM
-    optimizer = helperfns.choose_optimizer(params, loss, trainable_var)
-    optimizer_autoencoder = helperfns.choose_optimizer(params, loss1, trainable_var)
+    #optimizer = helperfns.choose_optimizer(params, loss, trainable_var)
+    #optimizer_autoencoder = helperfns.choose_optimizer(params, loss1, trainable_var)
+
+    deep_koop.compile(
+        optimizer=tf.optimizers.Adam(params['learning_rate']),
+        loss=deep_koop.total_loss,
+        metrics=[deep_koop.recon_loss, deep_koop.prediction_loss, deep_koop.linearity_loss, deep_koop.linf_loss],
+        run_eagerly=True,
+    )
+
+    data_train = np.loadtxt(('./data/%s_train%d_x.csv' % (params['data_name'], 1)), delimiter=',',
+                    dtype=np.float64)
+    data_train_tensor = helperfns.stack_data(data_train, max_shifts_to_stack, params['len_time'])
+    data_train_tensor = tf.transpose(data_train_tensor, perm=[1, 0, 2])
+
+    data_val_tensor = helperfns.stack_data(data_val, max_shifts_to_stack, params['len_time'])
+
+    deep_koop.fit(
+        x=data_train_tensor,
+        y=data_train_tensor,
+        epochs=50,
+        batch_size=params["batch_size"],
+    )
 
     # LAUNCH GRAPH AND INITIALIZE
     sess = tf.compat.v1.Session()
