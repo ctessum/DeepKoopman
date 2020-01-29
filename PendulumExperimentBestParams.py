@@ -3,7 +3,7 @@ import kerastuner
 import networkarch as net
 import tensorflow as tf
 
-tf.keras.backend.set_floatx('float64')
+#tf.keras.backend.set_floatx('float64')
 
 # settings related to dataset
 data_name = 'Pendulum'

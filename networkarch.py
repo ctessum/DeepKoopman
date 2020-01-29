@@ -104,7 +104,7 @@ class DeepKoopman(tf.keras.Model):
         """
         super(DeepKoopman, self).__init__()
 
-        self.delta_t = tf.constant(delta_t, name="delta_t", dtype=tf.float64)
+        self.delta_t = tf.constant(delta_t, name="delta_t")
 
         self.total_steps = total_steps
         self.steps_for_loss = min(steps_for_loss, total_steps - 1)

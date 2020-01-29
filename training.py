@@ -8,7 +8,7 @@ import kerastuner
 import helperfns
 import networkarch as net
 
-tf.keras.backend.set_floatx('float64')
+#tf.keras.backend.set_floatx('float64')
 
 
 def try_net(params):
