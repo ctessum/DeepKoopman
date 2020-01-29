@@ -12,6 +12,7 @@ params['len_time'] = 51
 n = 2  # dimension of system (and input layer)
 num_initial_conditions = 5000  # per training file
 params['delta_t'] = 0.02
+params['input_dim'] = 2
 
 # settings related to saving results
 params['folder_name'] = 'exp2'

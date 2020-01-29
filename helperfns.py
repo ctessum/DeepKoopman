@@ -6,6 +6,25 @@ import numpy as np
 import tensorflow as tf
 
 
+def load_training_data(data_name, num_files, num_steps, num_steps_for_loss):
+    num_steps_for_loss = min(num_steps_for_loss, num_steps-1)
+    for f in range(num_files):
+        file_num = f + 1  # 1...data_train_len
+        data_train = np.loadtxt(('./data/%s_train%d_x.csv' % (data_name, file_num)), delimiter=',',
+                                    dtype=np.float64)
+        data_train_tensor_temp = stack_data(data_train, num_steps_for_loss, num_steps)
+        if f==0: data_train_tensor = data_train_tensor_temp
+        else: data_train_tensor = tf.concat([data_train_tensor, data_train_tensor_temp], axis=1)
+    return tf.transpose(data_train_tensor, perm=[1, 0, 2], name="training_data")
+
+def load_eval_data(data_name, num_steps, num_steps_for_loss):
+    # Load validation data
+    # data is num_steps x num_examples x n but load flattened version (matrix instead of tensor)
+    num_steps_for_loss = min(num_steps_for_loss, num_steps-1)
+    data_val = np.loadtxt(('./data/%s_val_x.csv' % (data_name)), delimiter=',', dtype=np.float64)
+    data_val_tensor = stack_data(data_val, num_steps_for_loss, num_steps)
+    return tf.transpose(data_val_tensor, perm=[1, 0, 2], name="eval_data")
+
 def stack_data(data, num_shifts, len_time):
     """Stack data from a 2D array into a 3D array.
 
